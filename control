@@ -1,0 +1,1172 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% 2022年度 IWM車のセミアクティブサスペンション   %
+%           2自由度 非線形Ｈ∞制御  %
+%  2022, Applying non linear H infinity control to the semi active suspension in IWM car    by Ravi  %
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+clc	
+clear all
+close all
+
+
+m1 = 50;           %[kg] in wheel motor tire, unsprung mass
+k1 = 160000;       %[N/m] tire stiffness coefficient 
+m2 = 300;          % [kg] sprung mass
+k2 = 16000;        %[N/m] suspension
+c2 = 1500;         %[Ns/m] damping coefficient 
+
+% c2=8.41e3;               % 簡略化後の空気ばねダンパの減衰係数 [N/(m/s)]
+c3max=2e9;                 % 可変ダンパの最大減衰係数 [N/(m/s)]  damper co efficient max
+c3min=0;                   % 可変ダンパの最小減衰係数 [N/(m/s)]   min
+%v=300;                     % 走行速度 [km/h] 
+
+
+
+%% ランダム波生成 Random wave generation
+T = 100; %Time
+
+dt = 0.001; %刻み時間 time step
+v = 60/3.6;    %走行速度 speed [km/h] to [m/sec]に
+Nt = T/dt; %データ数 number of data
+% DT= (100)/(Nt-1)
+rng(0,'twister')  %乱数発生器の制御  Control the random number generator (twister is the default)
+random = rand(1,Nt/2+1);    %一様分布乱数の生成  Generate uniformly distributed random numbers
+
+% 数値定義 define numbers
+tt = 0:dt:((Nt*dt));
+
+tt2= ((Nt)*dt/10):dt:(15);
+
+df = 1/(Nt*dt);     %基本振動数=1/(Ndt)
+f = 0:df:1/(2*dt);  %時間周波数 [Hz]
+F = f/v;            %空間周波数 [1/m]
+th = 2*pi*random;   %ランダムな位相角
+Sn0 = [ 16; 64; 256; 1024; 4096; 16384; 65536; 262144 ]; %RoadClass
+
+for Class=1:8
+    % generate PSD 
+    for ii=1:length(f)
+        if 0.001<=F(ii) && F(ii)<=100
+            P1(ii)=Sn0(Class)*10^-6*(0.1/F(ii))^2;
+        else
+            P1(ii)=0;
+        end
+        PP2(Class,ii) = P1(:,ii);
+    end
+    p = P1/v;  %PSD [mm^2/Hz]
+    pp(Class,:) = p;
+
+    %複素フーリエ係数
+    for ii=1:Nt
+        if ii<=Nt/2+1
+            ck(ii) = sqrt(p(ii)/(2*Nt*dt))*exp(j*th(ii));
+        else
+            ck(ii) = conj(ck(Nt-ii+2));
+        end
+        if ii==1 || ii==Nt/2+1
+            ck(ii) = real(sqrt(p(ii)/(Nt*dt))*exp(j*th(ii)));
+        end
+    end
+
+    % フーリエ逆変換
+    zw =real(ifft(ck))*Nt; %路面変位のランダム波[m]
+   
+   y0d = [0,zw];
+    Y0d(Class,:) = y0d;
+    X0d = diff(y0d)/dt;
+    E1 = [X0d];
+    E1(1,1) = -0.3;
+    w = [E1];
+    W(Class,:) = w;
+    [zwxx,fp] = pmtm(zw,[],Nt,1/dt,'adapt');
+    Zwxx(:,Class) = zwxx;
+end
+
+RoadClass = 3;  %RoadClass選択
+WW = Y0d(RoadClass,:);
+%Y0d=[0 WW];
+X0d=diff(WW)/dt;
+dx1=[X0d];
+
+%dx= [E1.'];
+dx= dx1(:,(10001:15001));
+%X0d=diff(Y0d)/dt;
+%E1=[X0d];
+%dx=[dx2.']; 
+
+
+plot(tt2,dx);
+nf1 = 5000;  %fのデータ数 1デカードを何分割すればいいか調べる
+% f=logspace(-1,2,1000);     % 周波数の範囲指定
+f = logspace(-0.31, 1.91, nf1);
+omg=2*pi*f;                % ω=2πf
+fs= 1000; %sampling frequency [Hz]
+duration = T-dt*2500; %signal duration [s]
+n = fs*duration;
+ f14 = fs*(0:(n/2))/n 
+% zw1=[A0,WW];
+% zw2=[WW,A0];
+% 
+% W0=[zw1;
+%     zw2];
+
+%yp=lsim(sysp,dx,tt2);                             % 状態方程式の設定
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% 状態方程式(パッシブサスペンション) %%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Ap=[    0       1       0       -1              % x2dot-x1dot
+%      -k2/m2  -c2/m2     0      c2/m2            % x2 2dot
+%         0       0       0        1              % x1dot-x0dot
+%       k2/m1   c2/m1  -k1/m1  -(c2)/m1];      % x1 2dot
+% Bp=[0 k1/m1 0 0]';                             % x0dot (状態方程式の外乱)
+% Cp=[ -k2/m2  -c2/m2     0      c2/m2            % x2 2dot
+%       k2/m1   c2/m1  -k1/m1  -(c2)/m1        % x1 2dot
+%         0       1       0       -1              % x2dot-x1dot
+%         0       0       0        1              % x1dot-x0dot
+%         1       0       0        0              % x2-x1
+%         0       0       1        0];            % x1-x0
+% Dp=[-1 k1/m1 0 -1 0 0]';                         % x0dot (出力方程式の外乱)
+% 
+% sysp=ss(Ap,Bp,Cp,Dp);    
+
+% 状態方程式の計算
+
+pAp1 = [ 0, 1, 0, 0;
+      -k1/m1, -c2/m1, k2/m1, c2/m1;
+      0, -1, 0, 1;
+      0, c2/m2, -k2/m2, -c2/m2 ];
+
+pBp1 = [ -1;
+      0;
+      0;
+      0 ];
+
+pCp1 = [ 1, 0, 0, 0;
+      -k1/m1, -c2/m1, k2/m1, c2/m1;
+      0, 0, 1, 0;
+      0, c2/m2, -k2/m2, -c2/m2];
+
+pDp1 = [ 0;
+       0;
+       0;
+       0]; %外乱が速度
+sysp=ss(pAp1,pBp1,pCp1,pDp1);
+yp=lsim(sysp,dx,tt2);                             % 状態方程式の設定
+
+% plot(tt2,dx);
+% legend('時間','変位');
+%figure('時間','変位');
+plot(tt2,dx)
+grid
+xlabel('時間[s]')
+ylabel('変位[m]')
+
+
+
+% plot(tt2,yp(:,1));
+% legend('時間','車体振動加速度');
+%figure('name','タイヤの相対変位');
+plot(tt2,yp(:,4),tt2,yp(:,2))
+grid
+xlabel('時間[s]')
+ylabel('車体振動加速度[m/s^2]')
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% 状態方程式(セミアクティブサスペンション) %%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% A=[    0       1       0       -1               % x2dot-x1dot
+%     -k2/m2  -c2/m2     0      c2/m2             % x2 2dot
+%        0       0       0        1               % x1dot-x0dot
+%      k2/m1   c2/m1  -k1/m1  -(c2)/m1];       % x1 2dot
+% B1=[0 0 -1 0]';        % 状態方程式の外乱入力 x0dot
+% B2=[0 -1/m2 0 1/m1]';     % 状態方程式の制御入力 x2dot-x1dot
+% A = [   -c2/m2    -k2/m2     c2/m2        0          %[振動加速度]車体
+%           1         0         -1          0          %[相対変位]車体-タイヤ間
+%        c2/m1  k2/m1  -c2/m1  -k1/m1      %[振動加速度]タイヤ
+%           0         0          1          0      ];  %[相対変位]タイヤ-路面間
+% 
+% B1 = [ 0  0  0  -1 ]'; %gairan
+% B2 = [ 1/m2  0  -1/m1  0 ]'; %nyyryoku
+% C=[ -c2/m2  -k2/m2     c2/m2     0             % x2 2dot
+%        0       1       0        0               % x2-x1
+%      c2/m1   k2/m1  -c2/m1  -(k1)/m1];       % x1 2dot
+% D1=[0 0 0]';           % 出力方程式の外乱入力 x0dot
+% D2=[1/m2 0 -1/m1]';        % 出力方程式の制御入力 x2dot-x1dot
+% 
+% sys1=ss(A,B1,C,D1);                             % 状態方程式の計算 xdot=A*x+B1*w+B2*xg2*c3
+% ysemi=lsim(sys1,dx,tt2);                          % 状態方程式の設定 y% z=C*x+D1*w+D2*xg2*c3
+
+
+
+
+
+
+
+
+
+%% passive
+
+X6(:,1)=[0 0 0 0 ]';
+
+H3=waitbar(0,'パッシブ計算中…');
+nt=length(tt2);
+
+for is=1:nt-1 % 1～nt-1まで繰り返し指令
+%     %m0=4e-5;                                                  % 任意の正定スカラー値関数
+%     %a11=sqrt(1+m0*X1(:,is)'*P*b2*b2'*P*X1(:,is));                           % a1(x)
+%     %a22=1/sqrt(1+m0*X1(:,is)'*(c11')*(c11)*X1(:,is));                           % a2(x)
+%     %u0=-((1+m0*X1(:,is)'*(c11')*(c11).*X1(:,is))*b2'*P*X1(:,is)+(c12').*X1(:,is));                 % u=-((1+m0*x'*C11'*C11*x)*B2*P+C12)*x
+%     %AAp=a1;                                                   % 
+%     BBp=[b1 b2];                                              % [z1 z2]
+%     C1p=[a11*c11                                              % [a1(x)*c11
+%      a22*c12];                                            %  a2(x)*c12]
+%     D0p=[zeros(sizBws1,sizD12)                                % [    0     
+%     a22*du              ];                                %  a2(x)*Du ]
+%     DDp=[m0
+%     c2/m1
+%     c2/m1
+%     c2/m2];
+%     Xv=X1(2,is)-X1(4,is);       % 相対速度(x2 dot-x1 dot)
+%     Bb=b1*(Xv);    
+%     % A22=(a22*(1/m1^2))*(Xv)^2;
+%     A22=(a22^2)
+%     PP=P*(Xv);
+%     if Xv==0; %A22==0;
+%        u1(is)=0;
+%     else
+%         u1(is)=-inv(A22)*(Bb'*PP)*X1(:,is);
+%     end
+% 
+%     if u1(is)>c3max
+%         u1(is)=c3max;
+%     end
+% 
+%     if u1(is)<c3min
+%         u1(is)=c3min;
+%     end
+% 
+%     Cn1(is)=abs(u1(is)*Xv);      % 可変ダンパ発生力
+%     Cw1(is)=abs(Cn1(is)*Xv);    % 仕事率
+%     
+    [Ad,Ld]=c2d(pAp1,pBp1,dt);
+    
+    X6(:,is+1)=Ad*X6(:,is)+Ld*dx(is); 
+% H3=waitbar(0,'パッシブ計算中…');
+%     waitbar((is)/(nt),H3);      % 計算中画面のバーが(is)/(nt)進ませる
+end
+
+% u1(nt)=u1(nt-1);
+% Cn1(nt)=Cn1(nt-1);
+% Cw1(nt)=Cw1(nt-1);
+close(H3);
+%y3(1,:)=Cp(1,:)*X4;
+%y3(ii,:)=Cp(ii,:).*X4(ii,:)+Dp(ii,:).*dx';
+ for iii=1:4
+%   %y(ii,:)=C1p(ii,:)*X1+D0p(ii,:).*u1+DDp(ii,:).*dx';          % 出力方程式
+   y3(iii,:)=pCp1(iii,:)*X6+pDp1(iii,:).*dx;
+ end
+%%
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% 状態方程式の係数行列の設定 %%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%***************************************************%
+%  xdot= Ax+ B1w+ B2u   状態方程式                  %
+%     z=C1x+D11w+D12u   制御量についての出力方程式  %
+%     y=C2x+D21w+D22u   観測量についての出力方程式  %
+%***************************************************%
+%***************************************************%
+%  xpdot= Apx+ Bp1w+ Bp2u   状態方程式                  %
+%     z=Cp1x+Dp11w+Dp12u   制御量についての出力方程式  %
+%     y=Cp2x+Dp21w+Dp22u   観測量についての出力方程式  %
+%***************************************************%
+% C1=[-k2/m2  -c2/m2     0      c2/m2             % x2 2dot
+%        1       0       0        0               % x2-x1
+%        0       0       0        0  ];           % c3
+% D11=[0 0 0]';              % 出力方程式の外乱入力 x0dot
+% D12=[-1/m2 0 1]';          % 出力方程式の制御入力 x2dot-x1dot
+% C2=[-k2/m2  -c2/m2     0      c2/m2             % x2 2dot
+%      k2/m1   c2/m1  -k1/m1  -(c2)/m1         % x1 2dot
+%        0       1       0       -1               % x2dot-x1dot
+%        1       0       0        0               % x2-x1
+%        0       0       1        0       ];      % x1-x0
+% D21=[0 0 0 0 0]';      % 出力方程式の外乱入力 x0dot
+% D22=[-1/m2 1/m1 0 0 0]';  % 出力方程式の制御入力 x2dot-x1dot
+Ap=[0  0  1  0;                        %Xp=[z1-z0  z2-z1  z1dot  z2dot]';
+    0  0  -1  1;
+    -k1/m1  k2/m1  -c2/m1  c2/m1;
+    0   -k2/m2  c2/m2  -c2/m2 ];
+Bp1=[-1                              % w= Z0dot 外乱
+    0
+    0
+    0];
+
+Bp2= [0                             % u=Ce(Z1dot-z2dot)
+      0 
+      -1/m1 
+      1/m2 ];
+
+Cp1= [0  -k2/m2  c2/m2  -c2/m2;
+      0  -1  0  0;
+      0  0  0  0];
+
+Cp2= [0  1  0  0; %state
+  
+     0  -k2/m2  -c2/m2  c2/m2];
+
+Dp21= [0                        %disturbance  
+       0];
+
+
+
+
+
+
+
+
+% 
+% C1 = [ -c2/m2    -k2/m2     c2/m2        0         %車体振動加速度 
+%          0         0          0          1         %[相対変位]タイヤ-路面間
+%          0         0          0          0         %アクチュエータ発生力
+%       c2/m1  k2/m1  -c2/m1  -k1/m1     %[振動加速度]タイヤ
+%          0         1          0          0     ];  %[相対変位]車体-タイヤ間
+% 
+% C2 = [ -c2/m2     -k2/m2     c2/m2        0          %車体振動加速度 
+%          0          0          0          1          %[相対変位]タイヤ-路面間
+%       c2/m1   k2/m1  -c2/m1  -k1/m1  ];  %[振動加速度]タイヤ
+%            
+%            
+% D11 = [ 0  0  0  0  0 ]';
+% D12 = [ 1/m2  0  1  -1/m1  0 ]';
+% D21 = [ 0  0  0 ]'; %gairan
+% D22 = [ 1/m2  0  -1/m1 ]';%nyuuryoku
+
+
+
+%******************************周波数重み**********************************%
+%  Wsn=(s^2+2*a*(2π*fa)+(2π*fa)^2)/(s^2+2*b*(2π*fb)+(2π*fb)^2)*c*10^d  %
+%**************************************************************************%
+%**************************状態に対する周波数重み**************************
+% %*********************1.車体振動加速度に対する重み:Ws1*********************
+% f_s1o=3;                % faの入力           % ピークの周波数
+% w_s1o=2*pi*f_s1o;          % ωaの入力
+f_s1=3.0;                 % fbの入力
+wa_s1=2*pi*f_s1;            % ωbの入力
+% itas1o=1500;                % 分子の係数 ピーク強さ
+% itas1=4.0;                % 分母の係数　全体強さ
+
+fb_s1 = f_s1*1.1;  %fbの入力
+wb_s1 = 2*pi*fb_s1;  %ωbの入力
+
+as12 = 3.5;            %分母の係数 尖りに関係
+bs12 = as12*900;        %分子の係数
+plus1=10^-4.2;                % 累乗
+num_s1=[1 2*bs12*wb_s1 wb_s1^2]*plus1;        % 分子の設定
+den_s1=[1 2*as12*wa_s1 wa_s1^2];                 % 分母の設定
+
+[mag_s1,phase_s1]=bode(num_s1,den_s1,omg);      % ゲインと位相の計算
+gain_s1=mag_s1;            % 重みについてのゲインの設定
+mag_s_inv1=1./mag_s1;      % 重みについてのゲインの逆数
+
+%*********************2.車体-タイヤ間相対変位に対する重み:Ws2*********************
+f_s2o=5.2;                % faの入力           % ピークの周波数
+wa_s2o=2*pi*f_s2o;          % ωaの入力
+f_s2=5.2;                 % fbの入力
+wb_s2=2*pi*f_s2;            % ωbの入力
+% itas2o=0.40;                % 分子の係数
+% itas2=0.02;                % 分母の係数
+as13 = 0.02;            %分母の係数 尖りに関係
+%bs13 = as13*10;        %分子の係数
+bs13 = as13*0.4;  
+plus2=10^-4.3;                % 累乗
+num_s2=[1 2*bs13*wb_s2 wb_s2^2]*plus2;        % 分子の設定
+den_s2=[1 2*as13*wa_s2o wa_s2o^2];                 % 分母の設定
+% num_s2=num_s2(1,1);
+% den_s2=den_s2(1,1);
+% num_s3=2;
+% den_s3=1e8;
+[mag_s2,phase_s2]=bode(num_s2,den_s2,omg);      % ゲインと位相の計算
+gain_s2=mag_s2;            % 重みについてのゲインの設定
+mag_s_inv2=1./mag_s2;      % 重みについてのゲインの逆数
+
+% %*********************3.制御入力に対する重み:Ws3*********************
+% f_s3o=1.01;                % faの入力            % ピークの周波数
+% w_s3o=2*pi*f_s3o;          % ωaの入力
+% f_s3=3.0;                 % fbの入力
+% w_s3=2*pi*f_s3;            % ωbの入力
+% itas3o=1000;                % 分子の係数
+% itas3=1.5;                % 分母の係数
+% plus3=5.86e-4;                % 累乗
+% % num_s3=[1 itas3o*w_s2o w_s3o^2]*plus3;           % 分子の設定
+% % den_s3=[1 itas3*w_s3 w_s3^2];                    % 分母の設定
+% % num_s3=num_s3(1,1);
+% % den_s3=den_s3(1,1);
+% % num_t3=0.5;
+% % den_t3=3e8;
+% num_s3=12;
+% den_s3=4;
+% [mag_s3,phase_s3]=bode(num_s3,den_s3,omg);       % ゲインと位相の計算
+% gain_s3=mag_s3;            % 重みについてのゲインの設定
+% mag_s_inv3=1./mag_s3;      % 重みについてのゲインの逆数
+%--------制御入力に対する重み:Ws3
+fb_s3 = 0.001;        %fbの入力
+wb_s3 = 2*pi*fb_s3;  %ωbの入力
+
+fa_s3 = 25;        %faの入力
+wa_s3 = 2*pi*fa_s3;  %ωaの入力
+
+bs3 = 1.5;   %分子の係数
+as3 = 0.65;  %分母の係数
+
+num_s3 = [ 1  2*bs3*wb_s3  wb_s3^2 ]*10^-3.73;  %分子の設定  
+den_s3 = [ 1  2*as3*wa_s3  wa_s3^2 ];            %分母の設定  
+
+[mag_s3,phase_s3] = bode(num_s3,den_s3,omg);  %ゲインと位相の計算
+gain_s3 = mag_s3;                             %重みについてのゲインの設定
+mag_s_inv3 = 1./mag_s3;                      %重みについてのゲインの逆数
+
+%*********************1,2,3をまとめて重み行列と重み関数、重みについての状態方程式の設定*********************
+Ws1=tf(num_s1,den_s1);                           % 車体振動加速度に対する重み関数:Ws1
+Ws2=tf(num_s2,den_s2);                           % 車体-台車間相対変位に対する重み関数:Ws2
+Ws3=tf(num_s3,den_s3);                           % 制御入力に対する重み関数:Ws3
+% Ws1=1;
+% Ws2=1;
+% Ws3=1;
+Ws=[Ws1  0   0
+     0  Ws2  0
+     0   0  Ws3];                                % 重み行列:Ws
+
+sysWs=ss(Ws);                                    % 重み（または外乱と制御量）に対する状態方程式の設定 zws
+[Aws,Bws,Cws,Dws]=ssdata(sysWs);                 % 重みに対する状態方程式の係数行列の取り出し
+%*******************************************************************************************************
+% Wsn=(s^2+2*a*(2π*fa)+(2π*fa)^2)/(s^2+2*b*(2π*fb)+(2π*fb)^2)*c*10^d
+%**************************入力に対する周波数重み**************************
+%*********************1.s車体振動加速度に対する重み:sWs1*********************
+f_t1o=3.0;                % faの入力            % ピークの周波数
+w_t1o=2*pi*f_t1o;          % ωaの入力
+f_t1=3.3;                 % fbの入力
+w_t1=2*pi*f_t1;            % ωbの入力
+% itat1o=1900;                % 分子の係数
+% itat1=6.0;                % 分母の係数
+as1 = 3.5;            %分母の係数 尖りに関係
+%bs1 = as1*2800;        %分子の係数
+bs1 = as1*1100; 
+plut1=10^-5;                % 累乗
+num_t1=[1 2*bs1*w_t1 w_t1^2]*plut1;         % 分子の設定
+den_t1=[1 2*as1*w_t1o w_t1o^2];                  % 分母の設定
+
+[mag_t1,phase_t1]=bode(num_t1,den_t1,omg);       % ゲインと位相の計算
+gain_t1=mag_t1;            % 重みについてのゲインの設定
+mag_t_inv1=1./mag_t1;      % 重みについてのゲインの逆数
+
+%*********************2.s車体-台車間相対変位に対する重み:sWs2*********************
+f_t2o=2.3;                % faの入力            % ピークの周波数
+w_t2o=2*pi*f_t2o;          % ωaの入力
+f_t2=f_t2o*1.3;                 % fbの入力
+w_t2=2*pi*f_t2;            % ωbの入力
+% itat2o=1.90;                % 分子の係数
+% itat2=0.02;                % 分母の係数
+as2 = 0.1;          %分母の係数 尖りに関係！
+%bs2 = as2*00.4;     %分子の係数
+bs2 = 0.04;
+plut2=10^-4;                % 累乗
+num_t2=[1 2*bs2*w_t2o w_t2o^2]*plut2;         % 分子の設定
+den_t2=[1 2*as2*w_t2 w_t2^2];                  % 分母の設定
+% num_t2=num_t2(1,1);
+% den_t2=den_t2(1,1);
+[mag_t2,phase_t2]=bode(num_t2,den_t2,omg);       % ゲインと位相の計算
+gain_t2=mag_t2;            % 重みについてのゲインの設定
+mag_t_inv2=1./mag_t2;      % 重みについてのゲインの逆数
+
+% %*********************3.s制御入力に対する重み:sWs3*********************
+% f_t3o=1.12;                % faの入力            % ピークの周波数
+% w_t3o=2*pi*f_t3o;          % ωaの入力
+% f_t3=2.0;                 % fbの入力
+% w_t3=2*pi*f_t3;            % ωbの入力
+% itat3o=1000;                % 分子の係数
+% itat3=1.5;                % 分母の係数
+% plut3=5.86e-5;                % 累乗
+% num_t3=[1 itat3o*w_t2o w_t3o^2]*plut3;           % 分子の設定
+% den_t3=[1 itat3*w_t3 w_t3^2];                    % 分母の設定
+% % num_t3=num_t3(1,1);
+% % den_t3=den_t3(1,1);
+% num_t3=10;
+% den_t3=7;
+% [mag_t3,phase_t3]=bode(num_t3,den_t3,omg);       % ゲインと位相の計算
+% gain_t3=mag_t3;            % 重みについてのゲインの設定
+% mag_t_inv3=1./mag_t3;      % 重みについてのゲインの逆数
+fb_s3 = 5.1;        %fbの入力
+wb_s3 = 2*pi*fb_s3;  %ωbの入力
+
+fa_s3 = 12;        %faの入力
+wa_s3 = 2*pi*fa_s3;  %ωaの入力
+
+bs3 = 3.5;   %分子の係数
+as3 = 3.65;  %分母の係数
+
+num_t3 = [ 1  2*bs3*wb_s3  wb_s3^2 ]*10^-5;  %分子の設定  
+den_t3 = [ 1  2*as3*wa_s3  wa_s3^2 ];            %分母の設定  
+% num_t3= 3;
+% den_t3=4;
+[mag_t3,phase_t3] = bode(num_t3,den_t3,omg);  %ゲインと位相の計算
+gain_t3 = mag_t3;                             %重みについてのゲインの設定
+mag_t_inv3 = 1./mag_t3;                      %重みについてのゲインの逆数
+
+%*********************1,2,3をまとめて重み行列と重み関数、重みについての状態方程式の設定*********************
+Wts1=tf(num_t1,den_t1);                          % 車体振動加速度に対する重み関数:Ws1
+Wts2=tf(num_t2,den_t2);                          % 車体-台車間相対変位に対する重み関数:Ws2
+Wts3=tf(num_t3,den_t3);                          % 制御入力に対する重み関数:Ws3
+% Wts1=1;
+% Wts2=1;
+% Wts3=1;
+
+Wts=[Wts1   0     0
+      0    Wts2   0
+      0     0    Wts3];                          % 重み行列:Ws
+
+sysWts=ss(Wts);                                  % 重み（または外乱と制御量）に対する状態方程式の設定 zts
+[Ats,Bts,Cts,Dts]=ssdata(sysWts);                % 重みに対する状態方程式の係数行列の取り出し
+
+%****************************************一般化プラント****************************************
+%**********************行列のサイズの表示:([ ]の中は左：行、右：列を示す)**********************
+[sizA1,sizA2]=size(Ap);          % 係数行列Apの行及び列の数を表示させる
+[sizB11,sizB12]=size(Bp1);       % 係数行列Bp1の行及び列の数を表示させる
+[sizB21,sizB22]=size(Bp2);       % 係数行列Bp2の行及び列の数を表示させる
+%[sizC1,sizC2]=size(C);          % 係数行列Cの行及び列の数を表示させる
+[sizC11,sizC12]=size(Cp1);       % 係数行列Cp1の行及び列の数を表示させる
+[sizC21,sizC22]=size(Cp2);       % 係数行列Cp2の行及び列の数を表示させる
+% [sizD11,sizD12]=size(D1);       % 係数行列D1の行及び列の数を表示させる
+% [sizD21,sizD22]=size(D2);       % 係数行列D2の行及び列の数を表示させる
+% [sizD111,sizD112]=size(D11);    % 係数行列D11の行及び列の数を表示させる
+% [sizD121,sizD122]=size(D12);    % 係数行列D12の行及び列の数を表示させる
+[sizD211,sizD212]=size(Dp21);    % 係数行列D21の行及び列の数を表示させる
+
+[sizAws1,sizAws2]=size(Aws);    % 係数行列Awsの行及び列の数を表示させる
+[sizBws1,sizBws2]=size(Bws);    % 係数行列Bwsの行及び列の数を表示させる
+[sizCws1,sizCws2]=size(Cws);    % 係数行列Cwsの行及び列の数を表示させる
+[sizDws1,sizDws2]=size(Dws);    % 係数行列Dwsの行及び列の数を表示させる
+
+[sizAts1,sizAts2]=size(Ats);    % 係数行列Atsの行及び列の数を表示させる
+[sizBts1,sizBts2]=size(Bts);    % 係数行列Btsの行及び列の数を表示させる
+[sizCts1,sizCts2]=size(Cts);    % 係数行列Ctsの行及び列の数を表示させる
+[sizDts1,sizDts2]=size(Dts);    % 係数行列Dtsの行及び列の数を表示させる
+% %**********************************************************************************************
+% % xp=[(k2/m1-k2/m2) ((c2/m1)+(c2/m2)) -k1/m1 ((c2/m2)+((c2)/m1))]';            % xp=[x1 2dot - x2 2dot]
+% % xw=[Aws(2,1)+Aws(4,1) Aws(1,2)+Aws(2,2) Aws(4,2)+Aws(4,3) Aws(2,4)+Aws(4,4)]';  % xw
+% % xu=[Ats(2,1)+Ats(4,1) Ats(1,2)+Ats(2,2) Ats(4,2)+Ats(4,3) Ats(2,4)+Ats(4,4)]';  % xu
+% x=[(k2/m1-k2/m2) ((c2/m1)+(c2/m2)) -k1/m1 ((c2/m2)-(c2/m1))]';
+% xw=[Aws(2,1)+Aws(4,1) Aws(1,2)+Aws(2,2)+Aws(4,2) Aws(4,3) Aws(2,4)+Aws(4,4)]';
+% xu=[Ats(2,1)+Ats(4,1) Ats(1,2)+Ats(2,2)+Ats(4,2) Ats(4,3) Ats(2,4)+Ats(4,4)]';
+% X=[x' xw' xu']';                                                               % x=[xp' xw' xu']'
+% c1=40
+%***********************  一般化プラントPpの設定  ***********************%
+%***** ([ ; ]の";"は行の境目を示す{「この場合、2行あることを示す」) *****%
+%   Aa=[A 0;Bws*C1 Aws]       Bb1=[B1;Bws*D11]       Bb2=[B2Bws*D12]     %
+%   Cc1=[Dws*C1 Cws]          Dd1=Dws*D11            Dd2=Dws*D12         %
+%   Cc2=[C2 0]                                                           %
+%   AA=Aa       BB=[Bb1 Bb2]    CC=[Cc1;Cc2]    DD=[Dd1 Dd2;D21 D22]     %
+%************************************************************************%
+% ipu=0.01;
+%Bb2=[B2 Bws*D12]  ;
+%特異問題(標準H∞制御問題に適さない場合に用いる)
+% D12=[D12
+%     ipu*ones(sizD122)];
+% C1=[C1
+% %     zeros(sizD122,sizC12)];
+% 
+% AA=[ A     zeros(sizA1,sizAws2)
+%     Bws*C1(1:3,:)       Aws];
+% BB=[  B1    zeros(sizB11,sizD211)    B2
+%     Bws*D11(1:3,:) zeros(sizBws1,sizD211) Bws*D12(1:3,:)];
+% CC=[Dws*C1(1:3,:)        Cws
+%       C2   zeros(sizC21,sizCws2)];
+% DD=[Dws*D11(1:3,:) zeros(sizCws1,sizD211) Dws*D12(1:3,:)
+%       D21     ipu*eye(sizD211)       D22 ];
+%   
+% BB=[B1 B2
+%     Bws*D11 Bws*D12];
+% CC=[Dws*C1 Cws
+%     zeros(4,sizC12+sizCws2)
+%     C2 zeros(sizC21,sizCws2)]
+% DD=[Dws*D11 Dws*D12
+%     ipu*eye(4)
+%       D21      D22];
+% DD=[Dws*D11 Dws*D12
+%      D21      D22];
+
+% %Pp=pck(AA,BB,CC,DD);                                      % 一般化プラントの作成
+% Pp=ss(AA,BB,CC,DD); 
+% %************** 制御器ＫとＫを元に計算された状態方程式の係数行列の算出 **************%
+% %　[K,G,ganma]=hinfsyn(Pp,観測出力yの数,制御入力uの数,                               %
+% %                         γイタレーションを行う際のγの下限,                        %
+% %                                γイタレーションを行う際のγの上限,                 %
+% %                                             γイタレーションが終了する値)   を入力 %
+% %************************************************************************************%
+% % [K,G,ganma]=hinfsyn(Pp,5,1,0.001,1,0.01);                 % 制御器Kの導出(リカッチ方程式と二分探索法)
+% [K,G,ganma]=hinfsyn(Pp,3,1);
+% % [Ak,Bk,Ck,Dk]=unpck(K);                                   % 制御器Kを考慮した状態方程式の係数行列
+% [Ak,Bk,Ck,Dk]=ssdata(K);  
+% ganma                                                     % γの出力
+
+%****************************** H∞制御で設計したときの状態方程式の導出 ******************************%
+% xdot=Ax+B1w+B2u                                                                                     %
+% z=C1x+D11w+D12u                                                                                     %
+% y=C2x+D21w+D22u                                                                                     %
+% xkdot=Akxk+Bky                                                                                      %
+% u=Ckxk+Dky                                                                                          %
+% u=Ckxk+Dk(C2x+D21w+D22u)                                                                            %
+% u=inv(I-DkD22)(DkC2x+Ckxk+DkD21w)                                                                   %
+% xdot=Ax+B1w+B2*inv(I-DkD22)(DkC2x+Ckxk+DkD21w)                                                      %
+%     =(A+B2*inv(I-DkD22)DkC2)x+B2*inv(I-DkD22)Ckxk+(B1+B2*inv(I-DkD22)DkD21)w                        %
+% xkdot=Akxk+Bk(C2x+D21w+D22(inv(I-DkD22)(DkC2x+Ckxk+DkD21w)))                                        %
+%      =Bk(C2+D22(inv(I-DkD22)DkC2))x+(Ak+Bk(D22(inv(I-DkD22)Ck)))xk+Bk(D21+D22(inv(I-DkD22)DkD21))w  %
+% z=C1x+D11w+D12inv(I-DkD22)(DkC2x+Ckxk+DkD21w)                                                       %
+%  =(C1+D12inv(I-DkD22)DkC2)x+D12inv(I-DkD22)Ckxk+(D11+D12inv(I-DkD22)DkD21)w                         %
+% y=C2x+D21w+D22inv(I-DkD22)(DkC2x+Ckxk+DkD21w)                                                       %
+%  =(C2+D22inv(I-DkD22)DkC2)x+D22inv(I-DkD22)Ckxk+(D21+D22inv(I-DkD22)DkD21)w                         %
+% %*****************************************************************************************************%
+% [sizAk1,sizAk2]=size(Ak);                                 % 係数行列Akの行及び列の数を表示させる
+% Idkd22=eye(size(Dk*D22));                                 % 単位行列の設定
+% dkd22_invf=inv(Idkd22-Dk*D22);                            % inv(I-Dk*D22)
+% 
+% %******************************* 係数行列Ag,Bg,Cg,Dgの算出 ***********************************
+% Ag=[A+B2*dkd22_invf*Dk*C2 B2*dkd22_invf*Ck
+%     Bk*(C2+D22*(dkd22_invf*Dk*C2)) Ak+Bk*D22*dkd22_invf*Ck];
+% Bg=[B1+B2*dkd22_invf*Dk*D21
+%     Bk*(D21+D22*dkd22_invf*Dk*D21)];
+% Cg=[C1+D12*dkd22_invf*Dk*C2 D12*dkd22_invf*Ck
+%     C2+D22*dkd22_invf*Dk*C2 D22*dkd22_invf*Ck];
+% Dg=[D11+D12*dkd22_invf*Dk*D21
+%     D21+D22*dkd22_invf*Dk*D21];
+
+%****************************************評価出力****************************************
+Bu=zeros(4,1);                                            % Bu(Bts)の行列整理
+Bu(1,1)=Bts(1,1)+Bts(1,2)+Bts(1,3);
+Bu(2,1)=Bts(2,1)+Bts(2,2)+Bts(2,3);
+Bu(3,1)=Bts(3,1)+Bts(3,2)+Bts(3,3);
+Bu(4,1)=Bts(4,1)+Bts(4,2)+Bts(4,3);
+% Bws*Cp1;
+% ravi=[ Bws*Cp1 Aws zeros((sizD211),sizAts1)];
+A=[Ap zeros(sizA1,sizAts1) zeros(sizA1,sizAts1)           % A=[Ap1  0   0
+    Bws*Cp1 Aws zeros(sizAts1,(sizAts1))                      %    BwCp Aw  0
+    zeros(sizAts1,sizA1) zeros(sizAts1,sizAts1) Ats];     %     0   0  Au]
+% b1=[B1   zeros(sizC22,sizD12) zeros(sizC22,sizD12) ;                                                 % B1=[Bp1
+%     zeros(sizAts1,sizCws1)                                  %      0
+%     zeros(sizAts1,sizCws1)];                                %      0 ]
+% b2=[B2 zeros(sizC22,sizD12) zeros(sizC22,sizD12)                                                   % B2(x)=[Bp2(x)
+%     0 0 0 
+%     0 0 0
+%     0 0 0                                             %          0
+%     0 0 0
+%     0 0 0 
+%     0 0 0 
+%     Bts]; %         Bu   ]
+Bu=zeros(4,1);                                            % Bu(Bts)の行列整理
+Bu(1,1)=Bts(1,1)+Bts(1,2)+Bts(1,3);
+Bu(2,1)=Bts(2,1)+Bts(2,2)+Bts(2,3);
+Bu(3,1)=Bts(3,1)+Bts(3,2)+Bts(3,3);
+Bu(4,1)=Bts(4,1)+Bts(4,2)+Bts(4,3);
+B1=[Bp1                                                    % B1=[Bp1
+    zeros(sizB11,sizB12)                                  %      0
+    zeros(sizB11,sizB12)
+    0
+    0
+    0
+    0];                                %      0 ]
+B2x=[Bp2                                                   % B2(x)=[Bp2(x)
+    zeros(8,1)   
+                  %          0
+    Bu];                                                  %         Bu   ]
+
+
+I=eye
+I2=eye(16);
+ep = 1e-7;  %gamma
+C11=[(Dws*Cp1)  (Cws)    zeros(sizCts1,sizAws1)];                   % C11=[DwCp Cw  0]
+C12=[zeros(sizDws1,sizAws1) zeros(sizCws1,sizA1) Cts];  % C12=[ 0   0  Cu]
+D12=eye(3,sizB12);                                   % Du=I
+C2=[Cp2  zeros(2,sizAws1)  zeros(2,sizAws1)  ];
+D21=[ Dp21];
+LMI=set([]);
+
+
+%MIMO to SISO
+
+% Q = sdpvar(16,16,'symmetric'); yalmip, sedumiをインストール
+%  M=(C11'*C11+C12'*C12-C2'*C2)
+% M=(C11'*C11+C12'*C12)
+% M=(C11'*C11)
+ R= sdpvar(16,16,'symmetric');
+% M1=A*Q+Q*A'+Q*(M)*Q+B1*((1.8)^2*I-D21'*D21)^(-1)*B1'
+% 
+% M1=Q*A+A'*Q+M+Q*B1*((1)^2*I-D21'*D21)^(-1)*B1'*Q
+%  M1=A*Q+Q*A'+Q*(C11'*C11+C12'*C12-C2'*C2)*Q+B1*((1.8)^2*I-D21'*D21)^(-1)*B1'
+% M1=A*Q+Q*A'+B1*((1.8)^2*I-D21'*D21)^(-1)*B1'
+% M1=Q*(C11'*C11+C12'*C12-C2'*C2)*Q;
+% M=(C11'*C11+C12'*C12-C2'*C2)
+% M1= [
+%  -A*Q-Q*A'          Q                  B1                    zeros(16,1);
+%  Q             (C11'*C11+C12'*C12-C2'*C2)^(-1)        zeros(16,1)          zeros(16,1);
+%  B1'                 zeros(1,1)                         (1.8)^2*eye(1)          D21;
+%  0                   0                     D21'                  I;
+%  ]      ;
+% M1= [
+%  -A*Q-Q*A'          Q                  B1                    ;
+%  Q             (C11'*C11+C12'*C12-C2'*C2)^(-1)        zeros(16,1)          ;
+%  B1'                 zeros(1,16)                         ((1.8)^2*I-D21'*D21)^(-1);
+%  ]      ;
+M2 =[ (-R*A-A'*R-C11'*C11-C12'*C12+C2'*C2)       R*B1
+       B1'*R                                (1)^2-D21'*D21 ]
+LMI = [LMI, M2 >=ep,R>=ep];
+%LMI2 = [LMI2, M1 >=ep];
+% solvesdp(LMI);
+  options = sdpsettings('solver','sedumi');%error here needs reinstallation of sedumi
+ optimize(LMI,R,options);
+%  optimize(LMI2,Q,sdpsettings('solver','sedumi'));
+% optimize(LMI2,Q);
+ R=value(R);
+ Q1=inv(R)
+Q1=value(Q1);
+Q1
+
+% %optimize(LMI);
+% Q*C2'
+%observer ricatti
+% %A*Q+QA'+Q(C11'*C11+C12'*C12-C2'*C2)Q+B1*(I-D21'*D21)*(-1)*B1'<0
+% [-AQ-QA'          Q                  B1                    0;
+%  Q                      (C11'*C11+C12'*C12-C2'C2)^(-1)      0          0;
+%  B1'                     0                         I                    D21;
+%  0                      0                      D21'                  I;]      >0
+
+ Q = sdpvar(16,16,'symmetric');
+M1= [
+ -A*Q-Q*A'          (C11'*C11+C12'*C12-C2'*C2)*Q                  B1                    ;
+ Q             eye(16)       zeros(16,1)          ;
+ B1'                 zeros(1,16)                         ((1.5)^2*I-D21'*D21)^(-1);
+ ]      ;
+LMI = [LMI, M1 >=ep,Q>=ep];
+  options = sdpsettings('solver','sedumi');%whenever you get an error here, reinstall sedumi
+ optimize(LMI,Q,options);
+ Q=value(Q);
+ Q
+ %Q1
+L=-Q*C2';
+L1=-Q1*C2'
+%状態feedbackゲインもとめる
+% r=1;
+%  [P,L1,G1,report]=care(A,B1,C11'*C11+C12'*C12,r^2);
+%LMI=set([]);
+P=sdpvar(16,16,'symmetric');
+M2=[-P*A-A'*P-(((0.9)^2)/((0.9^2)-1))*(C11'*C11+C12'*C12)        L*L'*P
+    P                                         (1/(0.9)^2)*eye(16)];
+LMI=[LMI,M2>=ep,P>=ep];
+options=sdpsettings('solver','sedumi');
+optimize(LMI,P,options);
+P=value(P);
+K1=-(B2x'*P+C12);
+strokedif=[0 0 1 -1 0 0 0 0 0 0 0 0 0 0 0 0];
+K2=-(B2x'*P);
+%%Qを用い、状態観測器を設計、パッシブで確認
+%P=P*10000
+dt
+%mimo into siso
+As=A
+Bs=[B1 B2x];
+Cs=[C11; C12; C2;];
+Ds=[zeros(3,1)  zeros(3,1);
+    zeros(3,1) D12
+    D21 zeros(2,1)];
+sysm=ss(As,Bs,Cs,Ds);
+pole(sysm);
+% Bsimu=[B1 B2x zeros(16,14)];
+% Bsimu1=[B2x zeros(16,15)];
+% sysd=ss(eye(16)+dt*As,dt*Bs,Cs,Ds,dt);
+% [Adi,Bdi,Cdi,Ddi]=ssdata(sysd);
+% sysdp=ss(eye(16)+dt*A,dt*B1,C2,D21,dt);
+% [Adp,Bdp,Cdp,Ddp]=ssdata(sysdp);
+% P1=eye(16)
+% X0p(:,1)=[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]';
+% X0(:,1)=[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]';
+% y0(:,1)=[0 0 0]';
+%H4=waitbar(0,'推定機計算中…');
+ %   waitbar((is)/(nt),H3); 
+% for is=1:nt-1
+% % 
+% %         [Ad,Ld]=c2d(pAp1,pBp1,dt);
+% %     
+% %     X6(:,is+1)=Ad*X6(:,is)+Ld*dx(is); 
+% %u1(is)=-(B2x'*P)*X0(:,is);
+% %  [Ad,Bd1]=c2d(A,B1,dt);
+% %  [Ad,Bd2x]=c2d(A,B2x,dt);
+%  % [Ad,Cd2]=c2d(A,C2,dt);
+% % [Cd1,Dd1]=c2d(Cp2,Dp21,dt);
+% %   X0p(:,is+1)=Ad*X0p(:,is)+Bd1*dx(is)+Bd2x*u1(is);%no observer
+% X0p(:,is+1)=Adp*X0p(:,is)+Bdp*dx(is)
+% y0p(:,is)=Cdp*X0p(:,is)+Ddp*dx(is);%without obsever 
+% y0o(:,is)=Cdp*X0(:,is)+D21*dx(is);%with observer
+% 
+% %X0(:,is+1)=Ad*X0(:,is)+Bd2x*u1(is)+L*(y0o(:,is)-y0p(:,is));
+% %X0(:,is+1)=Adp*X0(:,is)+Bdp*dx(is)+L*(y0o(:,is)-y0p(:,is))
+% X0(:,is+1)=(Adp-Cdp*L)*X0(:,is)+
+% %X0(:,is+1)=(Ad)
+% % H3=waitbar(0,'パッシブ計算中…');
+%     waitbar((is)/(nt),H4); 
+% end
+% close(H4);
+% for is=1:3
+% y0p(:,is)=C2*X0p+D21*dx;%without obsever 
+% end
+
+% 
+% figure('name','3フィルタヒカク');        % 台車振動加速度(x1 2dot)
+% plot(tt2,y0p(1,:),tt2,y0o(1,:)),grid
+% title('ヒカク');
+% legend('実際の値','推定値');
+% xlabel('時間[s]');
+% % xlim([0 tt2]);
+% ylabel('変位たぶん');
+% %ylim([-5 5]);
+
+% %****************************************リカッチ不等式****************************************
+% r=ganma;                                                  % γ正定数(任意)
+% %[P,L,G,report]=care(a1,b1,c11'*c11+c12'*c12,r^2);
+% %[P,L,G,report]=care(a1,b1,c11'*c11,r^2);
+% [P,L,G]=care(a1,b1,c11'*c11,r^2);
+%               % リカッチ不等式P*A+A'*P+(1/γ^2)*P*B1*B1'*P+C11'*C11+C12*C12'<0
+%P=P+4;
+% %rkc=P*a1+a1'*P+(1/r^2)*P*b1*b1'*P+c11'*c11+c12'*c12;      % P*A+A'*P+(1/γ)*P*B1*B1'*P+C11'*C11+C12*C12'<0
+% rkc=P*a1+a1'*P+(1/r^2)*P*b1*b1'*P+c11'*c11;
+% % if P>0
+% %     
+% % else
+% %     P;
+% %     P=abs(P);
+% %     %rkc=P*a1+a1'*P+(1/r)*P*b1*b1'*P+c11'*c11+c12'*c12;    % P*A+A'*P+(1/γ)*P*B1*B1'*P+C11'*C11+C12*C12'<0
+% %     rkc=P*a1+a1'*P+(1/r)*P*b1*b1'*P+c11'*c11;
+% % end
+% % if rkc<0
+% %     
+% % else
+% %     rkc=-abs(rkc);
+% % end
+% % P
+% % rkc
+% %****************************************リカッチ不等式****************************************
+%r=2; 
+% r1=0.08; % γ正定数(任意)
+% [P,L,G,report]=care(A,B1,C11'*C11+C12'*C12,r^2);
+% %[P,L,G,report]=care(a1,b1,c11'*c11,r^2);
+% %[P2,L2,G2,report]=care((A-b2*c12),b1,c11'*c11,r^2);
+%  G=(1/r^2)*b1*b1';
+%  R=(1/r^2);
+%  R1=(1/r1^2);
+%   Q=c11'*c11+c12'*c12;
+% %Q=c11'*c11;
+% LMI=set([]);
+%  P=sdpvar(16,16,'symmetric');
+% M1=[-P*A-A'*P-C11'*C11-C12'*C12         P*B1
+%     B1'*P                                 r^2];
+%  LMI2= [LMI,M1>=1e-4]
+% %  solvesdp(LMI2)
+%   options = sdpsettings('solver','sedumi');
+%  optimize(LMI2,P,options);
+% 
+% P=value(P)
+%  [P2,L,g] = icare(a1,[],Q,[],[],[],G);
+%  [S2,P,e]=lqr(a1,b1,Q,R,0);
+% [S21,ra1,e1]=dlqr(a1,b1,Q,R,0);
+% [P,L,G]=care(a1,b1,(c11'*c11+c12'*c12),r^2);
+%               % リカッチ不等式P*A+A'*P+(1/γ^2)*P*B1*B1'*P+C11'*C11+C12*C12'<0
+% P=P+4;
+% rkc=P*a1+a1'*P+(1/r^2)*P*b1*b1'*P+c11'*c11+c12'*c12;      % P*A+A'*P+(1/γ)*P*B1*B1'*P+C11'*C11+C12*C12'<0
+% rkc=P*a1+a1'*P+(1/r^2)*P*b1*b1'*P+c11'*c11;
+% if P>0
+% %     
+% else
+%     P;
+%     P=abs(P);
+%     %rkc=P*a1+a1'*P+(1/r)*P*b1*b1'*P+c11'*c11+c12'*c12;    % P*A+A'*P+(1/γ)*P*B1*B1'*P+C11'*C11+C12*C12'<0
+%     rkc=P*a1+a1'*P+(1/r)*P*b1*b1'*P+c11'*c11;
+% end
+% if rkc<0
+%     
+% else
+%     rkc=-abs(rkc);
+% end
+% P
+% rkc
+%****************************************評価出力****************************************
+% m0=4e-5;                                                  % 任意の正定スカラー値関数
+% a11b=sqrt(1+m0*X'*P*b2*b2'*P*X);                           % a1(x)
+% a22b=1/sqrt(1+m0*X'*c11'*c11*X);                           % a2(x)
+% u0b=-((1+m0*X'*c11'*c11*X)*b2'*P*X+c12*X);                 % u=-((1+m0*x'*C11'*C11*x)*B2*P+C12)*x
+% AApb=a1;                                                   % 
+% BBpb=[b1 b2];                                              % [z1 z2]
+% C1pb=[a11*c11                                              % [a1(x)*c11
+%      a22*c12];                                            %  a2(x)*c12]
+% D0pb=[zeros(sizBws1,sizD12)                                % [    0     
+%     a22*du              ];                                %  a2(x)*Du ]
+% DDpb=[m0
+%     c2/m1
+%     c2/m1
+%     c2/m2];                                               % 外乱?
+ %z=C1p*X+D0p*u0;                                         % z1= a1(x)*c11 *x
+% % z=C1p*X+D0p*u0;                                         % z2= a2(x)*c12 *x +a2(x)*Du *u
+% % 														  
+%%%%%%%%%%%%%%%%%%%%
+%% セミアクティブ制御 %%
+%%%%%%%%%%%%%%%%%%%%%%%%
+ X1(:,1)=[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]';
+ X4(:,1)=[0 0 0 0 0 0 0 0 0 0 0 0 0 0 ]';
+X7(:,1)=[0 0 0 0 0 0 0 0 0 0 0 0 0 0]';
+% X1=X4;
+% X1((5:12),:)=[ 0 0 0 0 0 0 0 0]';
+%X1((1:4),:)=X4;
+%  H1=waitbar(0,'セミアクティブ制御計算中…');
+%  nt=length(tt2);
+% %tt2=tt2(:,(0:10000));
+% % for is=1:nt-1
+% % 
+% %     [Ad,Ld]=c2d(Ag,Bg,dt);
+% % %     [Ad,Bd]=c2d(a1,b2,dt);
+% %     X4(:,is+1)=Ad*X4(:,is)+Ld*dx(is);
+% %     %u1a(is)=-(b2'*P)*X4(is);
+% %     waitbar((is)/(nt),H1);
+% %     
+% % 
+% % end
+% 
+% % for  in=1:nt
+% % %    [Cd,Dd]=c2d(Cg,Dg,dt);
+% %     u12=Cg*X4;
+% %     u13=Dg*dx;
+% %     
+% % end    
+% %X1=X4;
+% %  u121=u12(3,:);
+% for is=1:nt-1 % 1～nt-1まで繰り返し指令
+%     m0=3;
+%     Xv(is)=X1(1,is)-X1(3,is);       % 相対速度(x2 dot-x1 dot)
+%   %  Bb(:,is)=b2*(Xv(is));% 任意の正定スカラー値関数 いらないかも
+% %     Bb(:,is)=b2.*X1(:,is);%is it correct?? no need x
+% %     a11(is)=sqrt(1+m0*(X1(:,is)')*P*(b2)*(b2')*P*X1(:,is));                           % a1(x)
+%     a22(is)=1/sqrt(1+m0*X1(:,is)'*(C11')*(C11)*X1(:,is));                           % a2(x)
+% %a22(is)=1/sqrt(1+m0*Xv(is)'*(c11')*(c11)*Xv(is));                           % a2(x)
+% %     u0(is)=-((1+m0*X1(:,is)'*(c11')*(c11)*X1(:,is))*Bb(:,is)'*P*X1(:,is)+(c12').*X1(:,is)); 
+% %     u4(is)=-((1+m0*X1(:,is)'*(c11')*(c11)*X1(:,is))*Bb(:,is)'*P*X1(:,is)); % u=-((1+m0*x'*C11'*C11*x)*B2*P+C12)*x
+% %     AAp=a1;                                                   % 
+% %     BBp=[b1 b2];                                              % [z1 z2]
+% %     C1p=[c11*a11                                              % [a1(x)*c11
+% %      c12*a22];                                            %  a2(x)*c12]
+% %     D0p=[zeros(sizBws1,sizD12)                                % [    0     
+% %     a22*du              ];                                %  a2(x)*Du ]
+% %     DDp=[0
+% %     c2/m1
+% %     c2/m1
+% %     c2/m2];
+% %     Xv=X1(2,is)-X1(4,is);       % 相対速度(x2 dot-x1 dot)
+%  %    Bb=b2*(Xv(is));    
+% %    A22=(a22*(1/m1^2))*(Xv)^2;
+%     A22(is)=inv((a22(is))^2);
+% %    PP(:,(is+12))=P*(Xv(is));
+% %     if A22(is)==0; %A22==0;
+% %        u(is)=0;
+% %     else
+% %        u(is)=-((A22)*(Bb'*PP*X1(:,is))+(c12').*X1(:,is));
+%         u(is)=-((A22(is))*B2x'*P*X1(:,is));
+%   %      u2(is)=-((A22(is))*b2'*P2*X1(:,is));
+% % u3(is)=-((A22(is))*b2'*P3*X1(:,is));
+%          %u(is)=-((A22(is))*(b2'*P*X1(:,is)));
+%     %end
+% % 
+% %     if u(is)>c3max
+% %         u(is)=c3max;
+% %     end
+% % 
+% %     if u(is)<c3min
+% %         u(is)=c3min;
+% %     end
+% % 
+% %     Cn1(is)=-(u(is)*Xv(is));      % 可変ダンパ発生力
+% %     Cw1(is)=abs(Cn1(is)*Xv(is));    % 仕事率
+%     %kalman filter
+% %     [kalmf,L,P] = kalman(sys,Q,R,N)
+%      [Ad,Ld]=c2d(A,B1,dt);
+%       [Ad,Bd]=c2d(A,B2x,dt);
+%      X1(:,is+1)=Ad*X1(:,is)+Ld*dx(is)+Bd*u(is); 
+% % X1(:,is+1)=Ad*X1(:,is)+Ld*dx(is); 
+%     
+%     waitbar((is)/(nt),H1);      % 計算中画面のバーが(is)/(nt)進ませる
+% end
+% 
+% for is=1:nt-1 
+% %        u(is)=-((A22)*(Bb'*PP*X1(:,is))+(c12').*X1(:,is));
+%          u3(is)=-((A22(is))*(b2)'*P*X1(:,is));
+%          
+%          %u(is)=-((A22(is))*(b2'*P*X1(:,is)));
+%     %end
+%     
+%     if u121(is)>c3max
+%         u121(is)=c3max;
+%     end
+% 
+%     if u121(is)<c3min
+%         u121(is)=c3min;
+%     end
+% 
+%     
+%     if u3(is)>c3max
+%         u3(is)=c3max;
+%     end
+% 
+%     if u3(is)<c3min
+%         u3(is)=c3min;
+%     end
+% 
+% end   
+% %  AAp=a1;                                                   % 
+% %     BBp=[b1 b2];                                              % [z1 z2]
+% %     C1p=[c11.*a11                                              % [a1(x)*c11
+% %      c12.*a22];                                            %  a2(x)*c12]
+%         C1p=[c11                                              % [a1(x)*c11
+%      c12];                                            %  a2(x)*c12]
+% %     D0p=[zeros(sizBws1,sizD12)                                % [    0     
+% %     a22*du              ];                                %  a2(x)*Du ]
+%         D0p=[zeros(sizBws1,sizD12)                                % [    0     
+%     du              ];                                %  a2(x)*Du ]
+%     DDp=[0
+%     c2/m1
+%     c2/m1
+%     c2/m2];
+% X1(nt)=X1(nt-1);
+% u(nt)=u(nt-1);
+% % Cn1(nt)=Cn1(nt-1);
+% %semip= u1*Xv;
+% %u4(nt)=u4(nt-1);
+% Xa=[0 0 0 0 ]';
+% 
+% for is=1:nt-1
+% 
+%          [Ad,Ld]=c2d(A,B1,dt);
+%       [Ad,Bd]=c2d(A,B2,dt);
+% %     X1(:,is+1)=Ad*X1(:,is)+Ld*dx(is)+Bd*u(is); 
+%  Xa(:,is+1)=Ad*Xa(:,is)+Ld*dx(is)+Bd*u121(is); 
+% 
+% end
+% y2(ii,:)=C1p(ii,:)*X1+D0p(ii,:).*u+DDp(ii,:).*dx;
+% close(H1);
+%   X2=X1((1:4),:);
+%   X4a=X4((1:4),:);
+%   Xa(nt)=Xa(nt-1);
+% %   u121=u12(3,:);
+%   Du=[1 0 0
+%       0 1 0
+%       0 0 1];
+% for ii=1:3
+%   y2(ii,:)=C1p(ii,:)*X1+D0p(ii,:).*u+DDp(ii,:).*dx;          % 出力方程式
+%   % y2(ii,:)=C2(ii,:)*X2+D21(ii,:).*dx+D22(ii,:).*u121;
+%    y3(ii,:)=C(ii,:)*Xa+D1(ii,:).*dx+D2(ii,:).*u121;
+% %   ya(ii,:)=C2(ii,:)*Xa+D21(ii,:).*dx-D22(ii,:).*u121;
+% %  yb(ii,:)=cy(ii,:)*X1;
+%  % yb1(ii,:)=C(ii,:)*Xa;
+% %  y4(ii,:)=C2(ii,:)*X4a+D21(ii,:).*dx+D22(ii,:).*u121;
+% %   y5(ii,:)=C2(ii,:)*X2+D21(ii,:).*dx+D22(ii,:).*u12(3,:);
+%  % y6(ii,:)=C(ii,:)*X2;
+% % z1(ii,:)= a22*c12(ii,:)*X1+a22*Du(ii,:).*u; %error
+%  % y2(ii,:)=Cg(ii,:)*X1+Dg(ii,:)*dx;
+%   %ynoshift(ii,:)=C(ii,:)*X2+D1(ii,:).*dx+D2(ii,:).*u4;
+%   %y2(2,:)=C(2,:)*X2+D1(2,:).*dx+D2(2,:).*u1
+%  end
+%   bsemi=rms(y2(1,:));
+%    tsemi=rms(y2(3,:));
+%         bsemi1=rms(y3(1,:));
+%       tsemi1=rms(y3(3,:));
+%         bsemi2=rms(u12(1,:));
+%       tsemi2=rms(u12(4,:));
+%  sys2=ss(Ag,Bg,Cg,Dg);
+%  yh=lsim(sys2,dx,tt2);
+% % 
+%   b2semi=rms(yh(1,:));
+% 
+% plot(tt2,yh(:,1),tt2,yp(:,2));
+% grid
+% xlabel('時間[s]')
+% ylabel('車体振動加速度[m/s^2]')
+
+%   t2semi=rms(y6(3,:));
+% bpass=rms(y3(4,:));
+% 
+% 
+% AA2= [a1];
+% 
+% BB2=[b1 b2];
+% 
+% 
+% CC2=[c11;
+%     c12
+%      ];
+% 
+% DD2=[0 0 0 0 0 0
+%      0 0 0 0 0 0
+%      0 0 0 0 0 0
+%      0 0 0 1 0 0 
+%      0 0 0 0 1 0 
+%      0 0 0 0 0 1
+% 
+%  
+%       ];
+%  %14 ni 
+% 
+% 
+% Pp2=ss(AA2,BB2,CC2,DD2);  %plant of non-linear h infinity
+% 
+% %************** 制御器ＫとＫを元に計算された状態方程式の係数行列の算出 **************%
+% %　[K,G,ganma]=hinfsyn(Pp,観測出力yの数,制御入力uの数,                               %
+% %                         γイタレーションを行う際のγの下限,                        %
+% %                                γイタレーションを行う際のγの上限,                 %
+% %                                             γイタレーションが終了する値)   を入力 %
+% %************************************************************************************%
+% % [K,G,ganma]=hinfsyn(Pp,5,1,0.001,1,0.01);                 % 制御器Kの導出(リカッチ方程式と二分探索法)
+% [K1,Ga,ganma1]=hinfsyn(Pp2,3,1);
+% % [Ak,Bk,Ck,Dk]=unpck(K);                                   % 制御器Kを考慮した状態方程式の係数行列
+% [Ak1,Bk1,Ck1,Dk1]=ssdata(K1);  
+% ganma1                                                     % γの出力
+% %****************************************リカッチ不等式****************************************
+% r=ganma1;                                                  % γ正定数(任意)
+% %[P,L,G,report]=care(a1,b1,c11'*c11+c12'*c12,r^2);
+% %[P,L,G,report]=care(a1,b1,c11'*c11,r^2);
+% G=(1/r^2)*b1*b1';
+% Q=c11'*c11+c12'*c12;
+% [P,L,G] = icare(a1,[],Q,[],[],[],G);
+% %[P,L,G]=care(a1,b1,(c11'*c11+c12'*c12),r^2);
+%               % リカッチ不等式P*A+A'*P+(1/γ^2)*P*B1*B1'*P+C11'*C11+C12*C12'<0
+% %P=P+4;
+% %rkc=P*a1+a1'*P+(1/r^2)*P*b1*b1'*P+c11'*c11+c12'*c12;      % P*A+A'*P+(1/γ)*P*B1*B1'*P+C11'*C11+C12*C12'<0
+% rkc=P*a1+a1'*P+(1/r^2)*P*b1*b1'*P+c11'*c11;
+% % if P>0
+% %     
+% else
+%     P;
+%     P=abs(P);
+%     %rkc=P*a1+a1'*P+(1/r)*P*b1*b1'*P+c11'*c11+c12'*c12;    % P*A+A'*P+(1/γ)*P*B1*B1'*P+C11'*C11+C12*C12'<0
+%     rkc=P*a1+a1'*P+(1/r)*P*b1*b1'*P+c11'*c11;
+% end
+% if rkc<0
+%     
+% else
+%     rkc=-abs(rkc);
+% end
+% P
+% rkc
+tt2d=tt2';
+dxd=dx';
+Wsimu=[tt2d dxd];
+
+% open_system('C:\Users')
+% SimulinkData = sim('C:\Users');
